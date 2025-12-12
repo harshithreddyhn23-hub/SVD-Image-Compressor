@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVD Image Compressor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl bg-white rounded-lg shadow-xl p-6 md:p-8">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">SVD Image Compressor</h1>
+            <p class="text-gray-600 mt-2">Upload an image and see the effect of Singular Value Decomposition.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 items-center bg-gray-50 p-4 rounded-lg">
+            <div class="flex flex-col">
+                <label for="image-upload" class="mb-2 font-medium text-gray-700">1. Upload Image</label>
+                <input type="file" id="image-upload" accept="image/*" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"/>
+            </div>
+            <div class="flex flex-col">
+                <label for="k-slider" class="mb-2 font-medium text-gray-700">2. Set Rank (k): <span id="k-value" class="font-bold text-blue-600">50</span></label>
+                <input type="range" id="k-slider" min="1" max="500" value="50" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" disabled>
+            </div>
+            <div class="flex flex-col justify-end h-full">
+                 <button id="compress-btn" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-300 disabled:bg-gray-400 disabled:cursor-not-allowed">3. Compress</button>
+            </div>
+        </div>
+        
+        <div id="status-container" class="text-center mb-4 min-h-[2rem] flex items-center justify-center gap-3">
+             <div id="loader" class="loader hidden"></div>
+             <p id="status-text" class="text-gray-500"></p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="text-center">
+                <h2 class="text-xl font-semibold mb-2">Original</h2>
+                <div class="bg-gray-200 rounded-lg aspect-square flex items-center justify-center">
+                    <canvas id="original-canvas" class="max-w-full max-h-full rounded-lg"></canvas>
+                </div>
+            </div>
+            <div class="text-center">
+                <div class="flex justify-center items-center mb-2">
+                    <h2 class="text-xl font-semibold">Compressed</h2>
+                    <button id="download-btn" class="ml-4 bg-green-500 text-white text-sm font-bold py-1 px-3 rounded-full hover:bg-green-600 transition duration-300 hidden" title="Download Compressed Image">&darr; Download</button>
+                </div>
+                <div class="bg-gray-200 rounded-lg aspect-square flex items-center justify-center">
+                    <canvas id="compressed-canvas" class="max-w-full max-h-full rounded-lg"></canvas>
+                </div>
+                <div id="compression-info" class="text-sm text-gray-600 mt-2 min-h-[3.5rem] text-left p-2 bg-gray-50 rounded-lg"></div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="text-center mt-8 text-gray-500 text-sm">
+        <p>Created using HTML, Tailwind CSS, and JavaScript. Matrix math powered by numeric.js.</p>
+    </footer>
+
+    <script>
+        const imageUpload = document.getElementById('image-upload');
+        const kSlider = document.getElementById('k-slider');
+        const kValue = document.getElementById('k-value');
+        const compressBtn = document.getElementById('compress-btn');
+        const originalCanvas = document.getElementById('original-canvas');
+        const compressedCanvas = document.getElementById('compressed-canvas');
+        const loader = document.getElementById('loader');
+        const statusText = document.getElementById('status-text');
+        const downloadBtn = document.getElementById('download-btn');
+        const compressionInfo = document.getElementById('compression-info');
+
+        const ctxOriginal = originalCanvas.getContext('2d');
+        const ctxCompressed = compressedCanvas.getContext('2d');
+
+        let originalImage = null;
+        let imageWidth, imageHeight;
+
+        kSlider.addEventListener('input', (e) => kValue.textContent = e.target.value);
+
+        imageUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                originalImage = new Image();
+                originalImage.onload = () => {
+                    imageWidth = originalImage.width;
+                    imageHeight = originalImage.height;
+
+                    const maxDim = 500;
+                    let displayWidth, displayHeight;
+                    if (imageWidth > imageHeight) {
+                        displayWidth = Math.min(imageWidth, maxDim);
+                        displayHeight = imageHeight * (displayWidth / imageWidth);
+                    } else {
+                        displayHeight = Math.min(imageHeight, maxDim);
+                        displayWidth = imageWidth * (displayHeight / imageHeight);
+                    }
+                    originalCanvas.width = compressedCanvas.width = displayWidth;
+                    originalCanvas.height = compressedCanvas.height = displayHeight;
+                    ctxOriginal.drawImage(originalImage, 0, 0, displayWidth, displayHeight);
+
+                    const maxK = Math.min(imageWidth, imageHeight, 500);
+                    kSlider.max = maxK;
+                    kSlider.value = Math.min(50, maxK);
+                    kValue.textContent = kSlider.value;
+                    kSlider.disabled = false;
+                    compressBtn.disabled = false;
+                    statusText.textContent = 'Image loaded. Adjust K and press compress.';
+
+                    ctxCompressed.clearRect(0, 0, compressedCanvas.width, compressedCanvas.height);
+                    downloadBtn.classList.add('hidden');
+                    compressionInfo.innerHTML = '';
+                };
+                originalImage.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        compressBtn.addEventListener('click', () => {
+            if (!originalImage) {
+                statusText.textContent = 'Please upload an image first.';
+                return;
+            }
+            compressImage();
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            const link = document.createElement('a');
+            link.download = `compressed-k${kSlider.value}.png`;
+            link.href = compressedCanvas.toDataURL();
+            link.click();
+        });
+
+        function showLoading(message) {
+            loader.classList.remove('hidden');
+            statusText.textContent = message;
+            compressBtn.disabled = true;
+            kSlider.disabled = true;
+            imageUpload.disabled = true;
+        }
+
+        function hideLoading(message) {
+            loader.classList.add('hidden');
+            statusText.textContent = message;
+            compressBtn.disabled = false;
+            kSlider.disabled = false;
+            imageUpload.disabled = false;
+        }
+
+        async function compressImage() {
+            showLoading('Compressing... this may take a moment.');
+            await new Promise(r => setTimeout(r, 50));
+
+            try {
+                const k = parseInt(kSlider.value);
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = imageWidth;
+                tempCanvas.height = imageHeight;
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.drawImage(originalImage, 0, 0, imageWidth, imageHeight);
+                const { data } = tempCtx.getImageData(0, 0, imageWidth, imageHeight);
+
+                const R = [], G = [], B = [];
+                for (let i = 0; i < imageHeight; i++) {
+                    R[i] = []; G[i] = []; B[i] = [];
+                    for (let j = 0; j < imageWidth; j++) {
+                        const idx = (i * imageWidth + j) * 4;
+                        R[i][j] = data[idx] / 255;
+                        G[i][j] = data[idx + 1] / 255;
+                        B[i][j] = data[idx + 2] / 255;
+                    }
+                }
+
+                const ReconstructedR = reconstruct(R, k);
+                const ReconstructedG = reconstruct(G, k);
+                const ReconstructedB = reconstruct(B, k);
+
+                const newImageData = ctxCompressed.createImageData(compressedCanvas.width, compressedCanvas.height);
+                const dw = compressedCanvas.width, dh = compressedCanvas.height;
+                for (let i = 0; i < dh; i++) {
+                    for (let j = 0; j < dw; j++) {
+                        const oi = Math.floor(i * (imageHeight / dh));
+                        const oj = Math.floor(j * (imageWidth / dw));
+                        const idx = (i * dw + j) * 4;
+                        newImageData.data[idx] = Math.max(0, Math.min(255, ReconstructedR[oi][oj] * 255));
+                        newImageData.data[idx + 1] = Math.max(0, Math.min(255, ReconstructedG[oi][oj] * 255));
+                        newImageData.data[idx + 2] = Math.max(0, Math.min(255, ReconstructedB[oi][oj] * 255));
+                        newImageData.data[idx + 3] = 255;
+                    }
+                }
+                ctxCompressed.putImageData(newImageData, 0, 0);
+
+                updateCompressionInfo(k);
+                hideLoading('Compression complete!');
+                downloadBtn.classList.remove('hidden');
+            } catch (err) {
+                console.error(err);
+                hideLoading('An error occurred during compression.');
+            }
+        }
+
+        function reconstruct(matrix, k) {
+            let transposed = false;
+            if (matrix.length < matrix[0].length) {
+                matrix = numeric.transpose(matrix);
+                transposed = true;
+            }
+            const svd = numeric.svd(matrix);
+            const U_k = svd.U.map(r => r.slice(0, k));
+            const S_k = svd.S.slice(0, k);
+            const V_k = svd.V.map(r => r.slice(0, k));
+            let result = numeric.dot(numeric.dot(U_k, numeric.diag(S_k)), numeric.transpose(V_k));
+            if (transposed) result = numeric.transpose(result);
+            return result;
+        }
+
+        function updateCompressionInfo(k) {
+            const m = imageHeight, n = imageWidth;
+            const originalSize = m * n;
+            const compressedSize = (m + n + 1) * k;
+            const reduction = (1 - compressedSize / originalSize) * 100;
+            compressionInfo.innerHTML = `
+                <p><strong>Original data size:</strong> ${originalSize.toLocaleString()} values/channel</p>
+                <p><strong>Compressed data size:</strong> ${compressedSize.toLocaleString()} values/channel</p>
+                <p><strong>Data Reduction:</strong> <span class="font-bold ${reduction > 0 ? 'text-green-600' : 'text-red-600'}">${reduction.toFixed(2)}%</span></p>`;
+        }
+
+        compressBtn.disabled = true;
+        compressionInfo.innerHTML = '';
+    </script>
+</body>
+</html>
